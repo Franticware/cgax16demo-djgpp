@@ -6,7 +6,7 @@
  *		License: MIT (do whatever you want with it)
  *
  *	Modified to build in DJGPP by Vojtěch Salajka, Aug 24, 2022:
- *		i586-pc-msdosdjgpp-g++ -O2 CGA16DMO.CPP -s -o CGA16DMO.EXE
+ *		i586-pc-msdosdjgpp-g++ -O2 -funroll-loops -fexpensive-optimizations CGA16DMO.CPP -s -o CGA16DMO.EXE
  */
 
 #include <dos.h>
@@ -76,38 +76,41 @@ void ega_page_flip(unsigned short *page1, unsigned short *page2)
 	while (!(inportb(SR) & VRETRACE));
 }
 
-static unsigned char bufP[8000];
+static unsigned char linebuf[40];
 
 void flip_ega(void)
 {
 	unsigned char* EGA = (unsigned char*)0xA0000 + active_page + __djgpp_conventional_base;
 
-	for (int p = 0; p != 4; ++p)
+	for (int p = 0; p != 4; ++p) /*cycle through 4 bitplanes*/
 	{
 		outportb(0x3C4, 2);
 		outportb(0x3C5, 1 << p);
-
-		for (int y = 0; y != 100; ++y)
+		unsigned char* egap = EGA;
+		unsigned char* scrp = screen;
+		for (int y = 100; y != 0; --y)
 		{
-			for (int x = 0; x != 40; ++x)
+			unsigned char* linep = linebuf;
+			for (int x = 40; x != 0; --x)
 			{
-				int i = x * 4 + y * 160;
-				unsigned char planeBits =
-					(((screen[i + 3] >> p) & 1) << 0) | (((screen[i + 2] >> p) & 1) << 2) |
-					(((screen[i + 1] >> p) & 1) << 4) | (((screen[i + 0] >> p) & 1) << 6);
+				unsigned char planeBits = (((*scrp >> p) & 1) << 6);
+				++scrp;
+				planeBits |= (((*scrp >> p) & 1) << 4);
+				++scrp;
+				planeBits |= (((*scrp >> p) & 1) << 2);
+				++scrp;
+				planeBits |= (((*scrp >> p) & 1));
+				++scrp;
 				planeBits = planeBits | (planeBits << 1);
-				bufP[x + y * 80] = planeBits;
+				*linep = planeBits;
+				++linep;
 			}
+			memcpy(egap, linebuf, 40);
+			egap += 40;
+			memcpy(egap, linebuf, 40);
+			egap += 40;
 		}
-
-		for (int y = 0; y != 100; ++y)
-		{
-			memcpy(bufP + 40 * (y * 2 + 1), bufP + 40 * (y * 2 + 0), 40);
-		}
-
-		memcpy(EGA, bufP, 8000);
 	}
-
 	ega_page_flip(&visual_page,&active_page);
 }
 
@@ -261,9 +264,8 @@ int main(void)
 			int k = (i - frame) & 0xf;
 			screen[i] = j;
 			screen[i+160] = j;
-			
-			screen[i+16000-320] = k;
-			screen[i+16000-160] = k;
+			screen[i+15680] = k;
+			screen[i+15840] = k;
 		}
 		flip();
 		if (mode == 1)
