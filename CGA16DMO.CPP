@@ -5,7 +5,8 @@
  *      Author: Perry Harrington
  *		License: MIT (do whatever you want with it)
  *
- *	This code is written to compile on Borland C++ 3.1 or later
+ *	Modified to build in DJGPP by Vojtěch Salajka, Aug 24, 2022:
+ *		i586-pc-msdosdjgpp-g++ -O2 CGA16DMO.CPP -s -o CGA16DMO.EXE
  */
 
 #include <dos.h>
@@ -13,6 +14,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <mem.h>
+#include <dpmi.h>
+#include <sys/nearptr.h>
+#include <crt0.h>
+#include <string.h>
 #include "xpm.h"
 
 #define CRTCa 0x3d8	/* 6845 mode control register */
@@ -52,9 +57,10 @@ simple helper to put video card back in standard 80x25 text mode
 */
 void text(void)
 {
-	_AL=(unsigned char) TEXT;
-	_AH=0;
-	geninterrupt(0x10);
+	__dpmi_regs dpmiRegs;
+	dpmiRegs.h.al=(unsigned char) TEXT;
+	dpmiRegs.h.ah=0;
+	__dpmi_int(0x10, &dpmiRegs);
 }
 
 /*
@@ -69,19 +75,21 @@ int x16mode(void)
 
 	text();					/* request 80x25 color mode */
 
-	_AH=0x12;
-	_AL=0;
-	_BL=0x10;
-	geninterrupt(0x10);		/* get EGA switch settings */
+	__dpmi_regs dpmiRegs;
 
-	switches = _CL;
+	dpmiRegs.h.ah=0x12;
+	dpmiRegs.h.al=0;
+	dpmiRegs.h.bl=0x10;
+	__dpmi_int(0x10, &dpmiRegs);		/* get EGA switch settings */
 
-	_AH=0x1a;
-	_AL=0;
-	geninterrupt(0x10);		/* get current display settings from BIOS (VGA only) */
+	switches = dpmiRegs.h.cl;
 
-	active = _BL;
-	status = _AL;
+	dpmiRegs.h.ah=0x1a;
+	dpmiRegs.h.al=0;
+	__dpmi_int(0x10, &dpmiRegs);		/* get current display settings from BIOS (VGA only) */
+
+	active = dpmiRegs.h.bl;
+	status = dpmiRegs.h.al;
 
 	if (status == 0x1a && (active == 0x07 || active == 0x08)) {  /* VGA color or mono*/
 
@@ -114,10 +122,10 @@ int x16mode(void)
 				switches == 0xB 	/* EGA w/MONO */
 				) {
 
-		_AL=0x03;
-		_AH=0x10;
-		_BL=0;
-		geninterrupt(0x10);		/* turn off blink via EGA BIOS */
+		dpmiRegs.h.al=0x03;
+		dpmiRegs.h.ah=0x10;
+		dpmiRegs.h.bl=0;
+		__dpmi_int(0x10, &dpmiRegs);		/* turn off blink via EGA BIOS */
 
 		/* EGA hires mode is 640x350 with a 9x14 character cell.  The pixel aspect
 			ratio is 1:1.37, so if we make the blocks 3 scans tall you get a square
@@ -136,11 +144,11 @@ int x16mode(void)
 
 	} else { /* CGA does not have an attribute controller register, only mode controller */
 
-		_AH=0xF;
-		_AL=0;
-		geninterrupt(0x10);		/* get current display settings from BIOS */
+		dpmiRegs.h.ah=0xF;
+		dpmiRegs.h.al=0;
+		__dpmi_int(0x10, &dpmiRegs);		/* get current display settings from BIOS */
 
-		if (_AL != 0x07) {		/* Check that this is not BW 80x25 */
+		if (dpmiRegs.h.al != 0x07) {		/* Check that this is not BW 80x25 */
 
 			/* set mode control register for 80x25 text mode and disable video output */
 			outportb(CRTCa, 1);
@@ -179,12 +187,16 @@ int x16mode(void)
 
 int main(void)
 {
-	unsigned char far *buffer;
+	unsigned char *buffer;
 	int i;
 	unsigned char lfsr,bit;
 	unsigned char screen[16000];
 
-	buffer = (unsigned char far *)MK_FP(0xb800,0);
+	if ( !(_crt0_startup_flags & _CRT0_FLAG_NEARPTR) )
+	if (!__djgpp_nearptr_enable ())
+		return 0;
+
+	buffer = (unsigned char  *)0xb8000 + __djgpp_conventional_base;
 
 	/* enable 160x100 16 color mode */
 	i=x16mode();
@@ -220,7 +232,7 @@ int main(void)
 			screen[i]=lfsr;
 		}
 		vsync();
-		_fmemcpy(buffer,screen,16000);
+		memcpy(buffer,screen,16000);
 	}
 
 	text();
