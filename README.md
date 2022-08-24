@@ -29,14 +29,6 @@ has 16384 bytes of memory, of with 16000 is consumed by this display buffer.  Th
 text page flipping will not work.  In normal 80x25 mode there are 8 text pages to choose from, each consuming 2000 bytes of
 memory.
 
-The VGA display controller can similarly be hacked to display 160x100 16 color cells, but it's even simpler.  The VGA
-controller text mode is represented by 8x16 pixel cells comprised of square pixels.  The raw output of the VGA controller
-is 720x400 pixels at 70hz in text mode.  By adjusting the scanlines per character to 4 instead of 16, you get 100 lines
-tall by 80 cells wide, the same as CGA.  The only other change required to VGA is to disable the blink attribute so both
-the FG and BG attribute nibbles represent 16 colors, otherwise you get 16x8 colors with blinking.
-
-The code in this repository is annotated with explanations for each register access and demonstrates accessing the video
-memory via far pointers.  Keep in mind that on 16bit architectures it is expensive to access far pointers, so you want to
-try and keep as much data manipulation as you can in the local data segment or in registers.
+For EGA, the mode is emulated by doubling pixels in x and y direction in 320x200 16 color graphics mode.
 
 ![Video](video.gif)

@@ -19,13 +19,131 @@
 #include <crt0.h>
 #include <string.h>
 
-#define CRTCa 0x3d8	/* 6845 mode control register */
-#define CRTCb 0x3d4 /* 6845 index register */
-#define SR	0x3da	/* Input Status Register */
-#define TEXT 0x03   /* DOS video mode for 80x25 text */
+#define CRTCa			0x3d8	/* 6845 mode control register */
+#define CRTCb			0x3d4	/* 6845 index register */
+#define SR				0x3da	/* Input Status Register */
+#define TEXT			0x03	/* DOS video mode for 80x25 text */
+#define HIGH_ADDRESS	0x0C	/* CRT controller registers */
+#define LOW_ADDRESS		0x0D
+#define DISPLAY_ENABLE	0x01	/* VGA input status bits */
+#define VRETRACE		0x08
 
 static unsigned char screen[16000];
-static unsigned char *buffer;
+static unsigned char *cgabuf; /* CGA page pointer */
+static unsigned short visual_page = 0; /* EGA page offsets */
+static unsigned short active_page = 320*200/8;
+void (*flip)(void);
+
+/* wait for vsync period to synchronize actions */
+void vsync_cga(void)
+{
+	while ((inportb(SR) & VRETRACE));
+	while (!(inportb(SR) & VRETRACE));
+}
+
+void flip_cga(void)
+{
+	unsigned char* buffout = cgabuf + 1;
+	unsigned char* scrin = screen;
+	union { struct { unsigned char a : 4; unsigned char b : 4; } p; unsigned char ab; } pack;
+	vsync_cga();
+	for (int i = 8000; i != 0; --i)
+	{
+		pack.p.b = *scrin;
+		++scrin;
+		pack.p.a = *scrin;
+		++scrin;
+		*buffout = pack.ab;
+		buffout += 2;
+	}
+}
+
+void ega_page_flip(unsigned short *page1, unsigned short *page2)
+{
+
+	#define CRTC_INDEX          0x03d4    /* VGA CRT controller */
+	unsigned short high_address,low_address;
+	unsigned short temp;
+
+	temp=*page1;
+	*page1=*page2;
+	*page2=temp;
+
+	high_address = HIGH_ADDRESS | (*page1 & 0xff00);
+	low_address  = LOW_ADDRESS  | (*page1 << 8);
+
+	while ((inportb(SR) & DISPLAY_ENABLE));
+	outpw(CRTC_INDEX, high_address);
+	outpw(CRTC_INDEX, low_address);
+	while (!(inportb(SR) & VRETRACE));
+}
+
+static unsigned char bufB[8000];
+static unsigned char bufG[8000];
+static unsigned char bufR[8000];
+static unsigned char bufI[8000];
+
+void flip_ega(void)
+{
+	unsigned char* EGA = (unsigned char*)0xA0000 + active_page + __djgpp_conventional_base;
+
+	for (int y = 0; y != 100; ++y)
+	{
+		for (int x = 0; x != 40; ++x)
+		{
+			int i = x * 4 + y * 160;
+			unsigned char blueBits = 
+				((screen[i + 3] & 1) << 0) | ((screen[i + 2] & 1) << 2) | 
+				((screen[i + 1] & 1) << 4) | ((screen[i + 0] & 1) << 6);
+			blueBits = blueBits | (blueBits << 1);
+			bufB[x + y * 80] = blueBits;
+
+			unsigned char greenBits = 
+				((screen[i + 3] & 2) >> 1) | ((screen[i + 2] & 2) << 1) | 
+				((screen[i + 1] & 2) << 3) | ((screen[i + 0] & 2) << 5);
+			greenBits = greenBits | (greenBits << 1);
+			bufG[x + y * 80] = greenBits;
+
+			unsigned char redBits = 
+				((screen[i + 3] & 4) >> 2) | ((screen[i + 2] & 4) << 0) | 
+				((screen[i + 1] & 4) << 2) | ((screen[i + 0] & 4) << 4);
+			redBits = redBits | (redBits << 1);
+			bufR[x + y * 80] = redBits;
+
+			unsigned char intBits = 
+				((screen[i + 3] & 8) >> 3) | ((screen[i + 2] & 8) >> 1) | 
+				((screen[i + 1] & 8) << 1) | ((screen[i + 0] & 8) << 3);
+			intBits = intBits | (intBits << 1);
+			bufI[x + y * 80] = intBits;
+		}
+	}
+
+	for (int y = 0; y != 100; ++y)
+	{
+		memcpy(bufB + 40 * (y * 2 + 1), bufB + 40 * (y * 2 + 0), 40);
+		memcpy(bufG + 40 * (y * 2 + 1), bufG + 40 * (y * 2 + 0), 40);
+		memcpy(bufR + 40 * (y * 2 + 1), bufR + 40 * (y * 2 + 0), 40);
+		memcpy(bufI + 40 * (y * 2 + 1), bufI + 40 * (y * 2 + 0), 40);
+	}
+
+	outportb(0x3C4, 2);
+	outportb(0x3C5, 0b0001);
+	memcpy(EGA, bufB, 8000);
+
+	outportb(0x3C4, 2);
+	outportb(0x3C5, 0b0010);
+	memcpy(EGA, bufG, 8000);
+
+	outportb(0x3C4, 2);
+	outportb(0x3C5, 0b0100);
+	memcpy(EGA, bufR, 8000);
+
+	outportb(0x3C4, 2);
+	outportb(0x3C5, 0b1000);
+	memcpy(EGA, bufI, 8000);
+
+	ega_page_flip(&visual_page,&active_page);
+}
 
 /*
 Simple helper routing to write to the index register, then the data register
@@ -38,20 +156,6 @@ void write_crtc(unsigned int port, unsigned char reg, unsigned char val)
 {
 	outportb(port, reg);
 	outportb(port+1,val);
-}
-
-/* wait for vsync period to synchronize actions */
-void vsync(void)
-{
-    unsigned char p;
-
-	do {
-		p=inportb(SR);
-	} while (p & 8);
-
-	do {
-		p=inportb(SR);
-	} while (!(p & 8));
 }
 
 /*
@@ -86,37 +190,7 @@ int x16mode(void)
 
 	switches = dpmiRegs.h.cl;
 
-	dpmiRegs.h.ah=0x1a;
-	dpmiRegs.h.al=0;
-	__dpmi_int(0x10, &dpmiRegs);		/* get current display settings from BIOS (VGA only) */
-
-	active = dpmiRegs.h.bl;
-	status = dpmiRegs.h.al;
-
-	if (status == 0x1a && (active == 0x07 || active == 0x08)) {  /* VGA color or mono*/
-
-		/* Read the input status register to reset the VGA attribute controller index/data state */
-		status=inportb(SR);
-
-		/* VGA attribute controller index register, mode register select */
-		outportb(0x3c0,0x10);
-
-		/* VGA attribute controller data register, read mode register */
-		status=inportb(0x3c1);
-
-		status&=0xf7;	/* turn off bit 3, blink */
-
-		outportb(0x3c0,0x10);	/* select the attribute control register */
-
-		outportb(0x3c0,status);	/* write to VGA attribute controller data register */
-			
-		/* VGA has an 8x16 character cell and 4 lines makes a square
-			since VGA has a 1:1 pixel aspect ratio */
-		write_crtc(CRTCb,0x09,0x03);
-
-		return 3;	/* VGA */
-
-	} else if ( /* EGA */
+	if ( /* EGA */
 				switches == 0x6 ||	/* CGA w/CGA 40x25 */
 				switches == 0x7 ||	/* CGA w/CGA 80x25 */
 				switches == 0x8 ||	/* EGA w/CGA 80x25 */
@@ -124,26 +198,15 @@ int x16mode(void)
 				switches == 0xB 	/* EGA w/MONO */
 				) {
 
-		dpmiRegs.h.al=0x03;
-		dpmiRegs.h.ah=0x10;
-		dpmiRegs.h.bl=0;
-		__dpmi_int(0x10, &dpmiRegs);		/* turn off blink via EGA BIOS */
+		dpmiRegs.h.ah = 0x00;  /* function 00h = mode set */
+		dpmiRegs.h.al = 0x0d;  /* EGA 320x200 16 colors */
+		__dpmi_int(0x10, &dpmiRegs);
 
-		/* EGA hires mode is 640x350 with a 9x14 character cell.  The pixel aspect
-			ratio is 1:1.37, so if we make the blocks 3 scans tall you get a square
-			pixel at 160x100, but some of the scan lines are not used (50) */
-		
-		if (
-			switches == 0x09 ||		/* EGA Hires monitor attached, 9x14 */
-			switches == 0xB		/* EGA with Monochrome monitor, 9x14 */
-			) {
-				write_crtc(CRTCb,0x09,0x02);
-			} else {						/* Must be CGA 8x8 on EGA card */
-				write_crtc(CRTCb,0x09,0x01);
-			}
+		flip = flip_ega;
+
+		memset(screen, 0, 16000);
 
 		return 2;	/* EGA */
-
 	} else { /* CGA does not have an attribute controller register, only mode controller */
 
 		dpmiRegs.h.ah=0xF;
@@ -179,7 +242,7 @@ int x16mode(void)
 			/* re-enable the video output in 80x25 text mode */
 			outportb(CRTCa, 9);
 
-			buffer = (unsigned char  *)0xb8000 + __djgpp_conventional_base;
+			cgabuf = (unsigned char  *)0xb8000 + __djgpp_conventional_base;
 
 			for (int i=0;i<16000;i+=2) {
 				/* Set the video memory to ▐ */
@@ -187,8 +250,11 @@ int x16mode(void)
 				/* assign black color */
 				screen[i+1]=0;
 			}
-			vsync();
-			memcpy(buffer,screen,16000);
+			vsync_cga();
+			memcpy(cgabuf,screen,16000);
+			memset(screen, 0, 16000);
+
+			flip = flip_cga;
 
 			return 1;	/* CGA */
 
@@ -229,22 +295,15 @@ int main(void)
 			screen[i+16000-320] = k;
 			screen[i+16000-160] = k;
 		}
-		vsync();
+		flip();
+		if (mode == 1)
 		{
-			unsigned char* buffout = buffer + 1;
-			unsigned char* scrin = screen;
-			union { struct { unsigned char a : 4; unsigned char b : 4; } p; unsigned char ab; } pack;
-			for (int i = 8000; i != 0; --i)
-			{
-				pack.p.b = *scrin;
-				++scrin;
-				pack.p.a = *scrin;
-				++scrin;
-				*buffout = pack.ab;
-				buffout += 2;
-			}
+			++frame;
 		}
-		++frame;
+		else
+		{
+			--frame; /* invert scrolling direction in EGA mode for testing */
+		}
 	}
 	text();
 	return 0;
