@@ -60,8 +60,6 @@ void flip_cga(void)
 
 void ega_page_flip(unsigned short *page1, unsigned short *page2)
 {
-
-	#define CRTC_INDEX          0x03d4    /* VGA CRT controller */
 	unsigned short high_address,low_address;
 	unsigned short temp;
 
@@ -73,74 +71,42 @@ void ega_page_flip(unsigned short *page1, unsigned short *page2)
 	low_address  = LOW_ADDRESS  | (*page1 << 8);
 
 	while ((inportb(SR) & DISPLAY_ENABLE));
-	outpw(CRTC_INDEX, high_address);
-	outpw(CRTC_INDEX, low_address);
+	outpw(CRTCb, high_address);
+	outpw(CRTCb, low_address);
 	while (!(inportb(SR) & VRETRACE));
 }
 
-static unsigned char bufB[8000];
-static unsigned char bufG[8000];
-static unsigned char bufR[8000];
-static unsigned char bufI[8000];
+static unsigned char bufP[8000];
 
 void flip_ega(void)
 {
 	unsigned char* EGA = (unsigned char*)0xA0000 + active_page + __djgpp_conventional_base;
 
-	for (int y = 0; y != 100; ++y)
+	for (int p = 0; p != 4; ++p)
 	{
-		for (int x = 0; x != 40; ++x)
+		outportb(0x3C4, 2);
+		outportb(0x3C5, 1 << p);
+
+		for (int y = 0; y != 100; ++y)
 		{
-			int i = x * 4 + y * 160;
-			unsigned char blueBits = 
-				((screen[i + 3] & 1) << 0) | ((screen[i + 2] & 1) << 2) | 
-				((screen[i + 1] & 1) << 4) | ((screen[i + 0] & 1) << 6);
-			blueBits = blueBits | (blueBits << 1);
-			bufB[x + y * 80] = blueBits;
-
-			unsigned char greenBits = 
-				((screen[i + 3] & 2) >> 1) | ((screen[i + 2] & 2) << 1) | 
-				((screen[i + 1] & 2) << 3) | ((screen[i + 0] & 2) << 5);
-			greenBits = greenBits | (greenBits << 1);
-			bufG[x + y * 80] = greenBits;
-
-			unsigned char redBits = 
-				((screen[i + 3] & 4) >> 2) | ((screen[i + 2] & 4) << 0) | 
-				((screen[i + 1] & 4) << 2) | ((screen[i + 0] & 4) << 4);
-			redBits = redBits | (redBits << 1);
-			bufR[x + y * 80] = redBits;
-
-			unsigned char intBits = 
-				((screen[i + 3] & 8) >> 3) | ((screen[i + 2] & 8) >> 1) | 
-				((screen[i + 1] & 8) << 1) | ((screen[i + 0] & 8) << 3);
-			intBits = intBits | (intBits << 1);
-			bufI[x + y * 80] = intBits;
+			for (int x = 0; x != 40; ++x)
+			{
+				int i = x * 4 + y * 160;
+				unsigned char planeBits =
+					(((screen[i + 3] >> p) & 1) << 0) | (((screen[i + 2] >> p) & 1) << 2) |
+					(((screen[i + 1] >> p) & 1) << 4) | (((screen[i + 0] >> p) & 1) << 6);
+				planeBits = planeBits | (planeBits << 1);
+				bufP[x + y * 80] = planeBits;
+			}
 		}
+
+		for (int y = 0; y != 100; ++y)
+		{
+			memcpy(bufP + 40 * (y * 2 + 1), bufP + 40 * (y * 2 + 0), 40);
+		}
+
+		memcpy(EGA, bufP, 8000);
 	}
-
-	for (int y = 0; y != 100; ++y)
-	{
-		memcpy(bufB + 40 * (y * 2 + 1), bufB + 40 * (y * 2 + 0), 40);
-		memcpy(bufG + 40 * (y * 2 + 1), bufG + 40 * (y * 2 + 0), 40);
-		memcpy(bufR + 40 * (y * 2 + 1), bufR + 40 * (y * 2 + 0), 40);
-		memcpy(bufI + 40 * (y * 2 + 1), bufI + 40 * (y * 2 + 0), 40);
-	}
-
-	outportb(0x3C4, 2);
-	outportb(0x3C5, 0b0001);
-	memcpy(EGA, bufB, 8000);
-
-	outportb(0x3C4, 2);
-	outportb(0x3C5, 0b0010);
-	memcpy(EGA, bufG, 8000);
-
-	outportb(0x3C4, 2);
-	outportb(0x3C5, 0b0100);
-	memcpy(EGA, bufR, 8000);
-
-	outportb(0x3C4, 2);
-	outportb(0x3C5, 0b1000);
-	memcpy(EGA, bufI, 8000);
 
 	ega_page_flip(&visual_page,&active_page);
 }
@@ -267,8 +233,12 @@ int x16mode(void)
 int main(void)
 {
 	if ( !(_crt0_startup_flags & _CRT0_FLAG_NEARPTR) )
-	if (!__djgpp_nearptr_enable ())
-		return 0;
+	{
+		if (!__djgpp_nearptr_enable ())
+		{
+			return 0;
+		}
+	}
 
 	/* enable 160x100 16 color mode */
 	int mode=x16mode();
