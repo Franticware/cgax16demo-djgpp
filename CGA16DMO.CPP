@@ -18,12 +18,14 @@
 #include <sys/nearptr.h>
 #include <crt0.h>
 #include <string.h>
-#include "xpm.h"
 
 #define CRTCa 0x3d8	/* 6845 mode control register */
 #define CRTCb 0x3d4 /* 6845 index register */
 #define SR	0x3da	/* Input Status Register */
 #define TEXT 0x03   /* DOS video mode for 80x25 text */
+
+static unsigned char screen[16000];
+static unsigned char *buffer;
 
 /*
 Simple helper routing to write to the index register, then the data register
@@ -177,6 +179,17 @@ int x16mode(void)
 			/* re-enable the video output in 80x25 text mode */
 			outportb(CRTCa, 9);
 
+			buffer = (unsigned char  *)0xb8000 + __djgpp_conventional_base;
+
+			for (int i=0;i<16000;i+=2) {
+				/* Set the video memory to ▐ */
+				screen[i]=0xde;
+				/* assign black color */
+				screen[i+1]=0;
+			}
+			vsync();
+			memcpy(buffer,screen,16000);
+
 			return 1;	/* CGA */
 
 		}
@@ -187,56 +200,52 @@ int x16mode(void)
 
 int main(void)
 {
-	unsigned char *buffer;
-	int i;
-	unsigned char lfsr,bit;
-	unsigned char screen[16000];
-
 	if ( !(_crt0_startup_flags & _CRT0_FLAG_NEARPTR) )
 	if (!__djgpp_nearptr_enable ())
 		return 0;
 
-	buffer = (unsigned char  *)0xb8000 + __djgpp_conventional_base;
-
 	/* enable 160x100 16 color mode */
-	i=x16mode();
-	if (i==0) {
+	int mode=x16mode();
+	if (mode==0) {
 		printf("No compatible display detected, MDA?\n");
 		return 1;
 	}
 
-	for (i=0;i<16000;i+=2) {
-		/* Set the video memory to ▐ */
-		screen[i]=0xde;
-		/* assign random color attribute to each cell */
-		screen[i+1]=(unsigned char)1+(rand()%254);
+	for (int i=0;i<16000;++i) {
+		screen[i]=rand() & 0xf;
 	}
+
+	int frame = 0;
 
 	while(!kbhit()) {
-		for (i=1;i<16000;i+=2) {
-			/* 
-				this lfsr implementation is much faster than calling rand() for each cell
-				the downside of this implementation is that black cells remain black and
-				the pattern repeats shortly.
+		/* scrolling strips */
+		for (int i = 0; i != 160; ++i)
+		{
+			int j = (i + frame) & 0xf;
+			int k = (i - frame) & 0xf;
+			screen[i] = j;
+			screen[i+160] = j;
 			
-				taps: 8 6 5 4; feedback polynomial: x^8 + x^6 + x^5 + x^4 + 1
-
-				it's faster to read the far pointer, manipulate it locally, then write
-			*/
-			lfsr=screen[i];
-
-			if (lfsr == xpm[i/2]) continue;
-			bit = ((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 4)) /* & 1 */;
-			lfsr = (lfsr >> 1) | (bit << 7);
-
-			screen[i]=lfsr;
+			screen[i+16000-320] = k;
+			screen[i+16000-160] = k;
 		}
 		vsync();
-		memcpy(buffer,screen,16000);
+		{
+			unsigned char* buffout = buffer + 1;
+			unsigned char* scrin = screen;
+			union { struct { unsigned char a : 4; unsigned char b : 4; } p; unsigned char ab; } pack;
+			for (int i = 8000; i != 0; --i)
+			{
+				pack.p.b = *scrin;
+				++scrin;
+				pack.p.a = *scrin;
+				++scrin;
+				*buffout = pack.ab;
+				buffout += 2;
+			}
+		}
+		++frame;
 	}
-
 	text();
-
 	return 0;
-
 }

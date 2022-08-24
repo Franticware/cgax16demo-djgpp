@@ -38,3 +38,5 @@ the FG and BG attribute nibbles represent 16 colors, otherwise you get 16x8 colo
 The code in this repository is annotated with explanations for each register access and demonstrates accessing the video
 memory via far pointers.  Keep in mind that on 16bit architectures it is expensive to access far pointers, so you want to
 try and keep as much data manipulation as you can in the local data segment or in registers.
+
+![Video](video.gif)
