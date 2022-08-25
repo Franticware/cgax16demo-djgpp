@@ -41,27 +41,37 @@ void vsync_cga(void)
     while (!(inportb(SR) & VRETRACE));
 }
 
+union NibPack
+{
+    struct
+    {
+        unsigned char a : 4;
+        unsigned char b : 4;
+    } p;
+    unsigned char ab;
+};
+
+NibPack cgascr[8000];
+
 void flip_cga(void)
 {
-    unsigned char* buffout = cgabuf + 1;
+    /*pack pixels*/
     unsigned char* scrin = screen;
-    union
-    {
-        struct
-        {
-            unsigned char a : 4;
-            unsigned char b : 4;
-        } p;
-        unsigned char ab;
-    } pack;
-    vsync_cga();
+    NibPack* cgascrp = cgascr;
     for (int i = 8000; i != 0; --i)
     {
-        pack.p.b = *scrin;
-        ++scrin;
-        pack.p.a = *scrin;
-        ++scrin;
-        *buffout = pack.ab;
+        cgascrp->p.b = *scrin++;
+        cgascrp->p.a = *scrin++;
+        ++cgascrp;
+    }
+    unsigned char* buffout = cgabuf + 1;
+    cgascrp = cgascr;
+    vsync_cga();
+    /*update framebuffer*/
+    for (int i = 8000; i != 0; --i)
+    {
+        *buffout = cgascrp->ab;
+        ++cgascrp;
         buffout += 2;
     }
 }
@@ -272,7 +282,7 @@ int main(void)
 
     int frame = 0;
 
-    while(!kbhit())
+    while (!kbhit())
     {
         /* scrolling strips */
         for (int i = 0; i != 160; ++i)
