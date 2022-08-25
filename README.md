@@ -1,7 +1,7 @@
 # cgax16demo
-CGA and VGA 160x100 16 color pseudo graphics mode demo code
+CGA 160x100 16 color pseudo graphics mode demo code
 
-This is example code to demonstrate how to put the CGA and VGA video display controllers into the 160x100 16 color pseudo
+This is example code to demonstrate how to put the CGA video display controllers into the 160x100 16 color pseudo
 graphics mode.
 
 This mode is a "hacked" version of text mode that reduces the character height to increase the number of displayable lines.
